@@ -619,18 +619,39 @@
   <script>
     // ============ UTILITIES ============
     const fmt = n => { if (isNaN(n)) n = 0; return n.toLocaleString('vi-VN') + ' ₫' }
-    const parseNum = v => {
-      if (v === null || v === undefined) return 0;
-      // Normalize common currency/locale formats (vi-VN): grouping '.' and decimal ','
-      let s = String(v).trim();
-      // remove currency symbol and whitespace
-      s = s.replace(/₫|\s+/g, '');
-      // remove thousands separator '.' and non-digit/decimal characters
-      // convert decimal comma to dot for parseFloat
-      s = s.replace(/\./g, '').replace(/,/g, '.');
-      // strip anything not digit, dot or minus
-      s = s.replace(/[^0-9.\-]+/g, '');
-      const n = Number(s);
+    const parseNum = (v, type = 'money') => {
+      if (v === null || v === undefined || v === '') return 0;
+      let s = String(v).trim().replace(/₫|\s+/g, '');
+      
+      if (type === 'qty') {
+        // Đối với số lượng: Ưu tiên dấu chấm/phẩy là dấu thập phân
+        // Thay thế phẩy thành chấm để parseFloat hiểu được
+        s = s.replace(/,/g, '.');
+        // Nếu có nhiều hơn 1 dấu chấm, chỉ giữ lại dấu chấm cuối cùng (đề phòng nhập lỗi)
+        if ((s.match(/\./g) || []).length > 1) {
+          const parts = s.split('.');
+          const last = parts.pop();
+          s = parts.join('') + '.' + last;
+        }
+      } else {
+        // Đối với tiền tệ: Ưu tiên dấu chấm/phẩy là dấu phân cách hàng nghìn
+        // Nếu chuỗi có cả chấm và phẩy (1.200,50) -> chuẩn hóa về định dạng máy tính
+        if (s.includes('.') && s.includes(',')) {
+          s = s.replace(/\./g, '').replace(/,/g, '.');
+        } else if (s.includes(',')) {
+          // Nếu chỉ có phẩy, kiểm tra xem có phải là thập phân không (thường tiền Việt không có thập phân)
+          // Nhưng để an toàn, ta coi nó là thập phân nếu nó đứng cuối và chỉ có 1 dấu
+          s = s.replace(/,/g, '.');
+        } else if (s.includes('.')) {
+          // Nếu chỉ có chấm, kiểm tra xem có phải phân cách nghìn không (120.000)
+          const parts = s.split('.');
+          if (parts[parts.length - 1].length === 3 || parts.length > 2) {
+            s = s.replace(/\./g, '');
+          }
+        }
+      }
+      
+      const n = parseFloat(s);
       return isNaN(n) ? 0 : n;
     }
     function getLayoutMode() { return document.querySelector('input[name="layoutMode"]:checked')?.value || 'mobile' }
@@ -756,11 +777,11 @@
     function onItemChange(e) {
       const i = Number(e.target.dataset.i), row = items[i]; if (!row) return;
       if (e.target.classList.contains('item-name')) row.name = e.target.value;
-      if (e.target.classList.contains('item-price')) row.price = parseNum(e.target.value);
-      if (e.target.classList.contains('item-qty')) row.qty = parseNum(e.target.value);
+      if (e.target.classList.contains('item-price')) row.price = parseNum(e.target.value, 'money');
+      if (e.target.classList.contains('item-qty')) row.qty = parseNum(e.target.value, 'qty');
       if (e.target.classList.contains('item-unit')) { row.unit = e.target.value; const q = document.querySelector(`.item-qty[data-i="${i}"]`); if (q) q.step = row.unit === 'kg' ? '0.01' : '0.5'; }
       if (e.target.classList.contains('disc-type')) row.discType = e.target.value;
-      if (e.target.classList.contains('disc-val')) row.disc = parseNum(e.target.value);
+      if (e.target.classList.contains('disc-val')) row.disc = parseNum(e.target.value, 'money');
       const tr = e.target.closest('tr'); if (tr?.querySelector('.total-cell')) tr.querySelector('.total-cell').textContent = fmt(calcItemTotal(row));
       recalcTotals();
     }
@@ -770,11 +791,11 @@
     function recalcTotals() {
       const total = items.reduce((s, it) => s + calcItemTotal(it), 0);
       document.getElementById('totalAmount').textContent = fmt(total);
-      const gdisc = parseNum(document.getElementById('globalDiscount').value);
+      const gdisc = parseNum(document.getElementById('globalDiscount').value, 'money');
       const net = Math.max(0, total - gdisc);
-      const prevDebt = parseNum(document.getElementById('previousDebt').value);
+      const prevDebt = parseNum(document.getElementById('previousDebt').value, 'money');
       const totalPayable = net + prevDebt;
-      const paid = parseNum(document.getElementById('paidAmount').value);
+      const paid = parseNum(document.getElementById('paidAmount').value, 'money');
       const remaining = Math.max(0, totalPayable - paid);
 
       document.getElementById('netAmount').textContent = fmt(totalPayable);
@@ -787,7 +808,7 @@
       const key = `cache:${cust}`;
       localStorage.setItem(key, JSON.stringify({
         ts: Date.now(), cust: { name: cust, phone: document.getElementById('custPhone').value, address: document.getElementById('custAddress').value, delivery: document.getElementById('deliveryType').value },
-        shop: JSON.parse(localStorage.getItem(SHOP_KEY) || 'null'), items, gdisc: parseNum(document.getElementById('globalDiscount').value), debt: parseNum(document.getElementById('previousDebt').value), paid: parseNum(document.getElementById('paidAmount').value)
+        shop: JSON.parse(localStorage.getItem(SHOP_KEY) || 'null'), items, gdisc: parseNum(document.getElementById('globalDiscount').value, 'money'), debt: parseNum(document.getElementById('previousDebt').value, 'money'), paid: parseNum(document.getElementById('paidAmount').value, 'money')
       }));
       showToast(`Đã lưu cache cho: ${cust}`);
     }
@@ -947,10 +968,10 @@ ${itemsList || '• Không có'}
         </table>
         <div style="text-align:right;font-size:0.95em;margin-top:1.5rem;">
           <div>Tổng tiền hàng: <strong>${fmt(items.reduce((s, it) => s + calcItemTotal(it), 0))}</strong></div>
-          ${parseNum(document.getElementById('globalDiscount').value) > 0 ? `<div>Chiết khấu: <span style="color:#10b981;">-${fmt(parseNum(document.getElementById('globalDiscount').value))}</span></div>` : ''}
-          ${parseNum(document.getElementById('previousDebt').value) > 0 ? `<div style="color:#ef4444;">Nợ kỳ trước: + ${fmt(parseNum(document.getElementById('previousDebt').value))}</div>` : ''}
-          <div style="font-size:1.4em;font-weight:800;color:#2563eb;margin:0.5rem 0;padding-top:0.5rem;border-top:3px solid #999;">${fmt(parseNum(document.getElementById('netAmount').textContent))}</div>
-          <div style="color:#64748b;font-style:italic;">Bằng chữ: ${toVietnameseWords(parseNum(document.getElementById('netAmount').textContent))}</div>
+          ${parseNum(document.getElementById('globalDiscount').value, 'money') > 0 ? `<div>Chiết khấu: <span style="color:#10b981;">-${fmt(parseNum(document.getElementById('globalDiscount').value, 'money'))}</span></div>` : ''}
+          ${parseNum(document.getElementById('previousDebt').value, 'money') > 0 ? `<div style="color:#ef4444;">Nợ kỳ trước: + ${fmt(parseNum(document.getElementById('previousDebt').value, 'money'))}</div>` : ''}
+          <div style="font-size:1.4em;font-weight:800;color:#2563eb;margin:0.5rem 0;padding-top:0.5rem;border-top:3px solid #999;">${fmt(parseNum(document.getElementById('netAmount').textContent, 'money'))}</div>
+          <div style="color:#64748b;font-style:italic;">Bằng chữ: ${toVietnameseWords(parseNum(document.getElementById('netAmount').textContent, 'money'))}</div>
         </div>
 
                 <div style="margin-top:2rem; background:#fff; padding:1.2rem; border-radius:10px; border:1px solid #e2e8f0; box-shadow:0 2px 8px rgba(0,0,0,0.04);">
